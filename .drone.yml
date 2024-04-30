@@ -1,0 +1,77 @@
+---
+kind: pipeline
+name: default
+type: kubernetes
+
+platform:
+  os: linux
+  arch: amd64
+
+steps:
+- name: building_image
+  pull: if-not-exists
+  image: 340268328991.dkr.ecr.eu-west-2.amazonaws.com/acp/dind
+  commands:
+  # wait for the docker service
+  - n=0; while [ "$n" -lt 60 ] && [ ! "$(docker stats --no-stream)" ]; do n=$(( n + 1 )); sleep 1; done
+  - docker build -t $${NAME}:$${DRONE_COMMIT_SHA} .
+  environment:
+    NAME: oauth2-proxy
+
+- name: image_to_quay
+  pull: if-not-exists
+  image: 340268328991.dkr.ecr.eu-west-2.amazonaws.com/acp/dind
+  commands:
+  - docker login -u="$${REGISTRY_USER}" -p=$${DOCKER_PASSWORD} $${REGISTRY}
+  - docker tag $${NAME}:$${DRONE_COMMIT_SHA} $${REGISTRY}/$${REGISTRY_AUTHOR}/$${NAME}:latest
+  - docker push $${REGISTRY}/$${REGISTRY_AUTHOR}/$${NAME}:latest
+  environment:
+    DOCKER_PASSWORD:
+      from_secret: docker_password
+    NAME: oauth2-proxy
+    REGISTRY: quay.io
+    REGISTRY_AUTHOR: ukhomeofficedigital
+    REGISTRY_USER: ukhomeofficedigital+oauth2_proxy
+  when:
+    branch:
+    - master
+    event:
+    - push
+
+- name: tagged_image_to_quay
+  pull: if-not-exists
+  image: 340268328991.dkr.ecr.eu-west-2.amazonaws.com/acp/dind
+  commands:
+  - docker login -u="$${REGISTRY_USER}" -p=$${DOCKER_PASSWORD} $${REGISTRY}
+  - docker tag $${NAME}:$${DRONE_COMMIT_SHA} $${REGISTRY}/$${REGISTRY_AUTHOR}/$${NAME}:$${DRONE_TAG}
+  - docker push $${REGISTRY}/$${REGISTRY_AUTHOR}/$${NAME}:$${DRONE_TAG}
+  environment:
+    DOCKER_PASSWORD:
+      from_secret: docker_password
+    NAME: oauth2-proxy
+    REGISTRY: quay.io
+    REGISTRY_AUTHOR: ukhomeofficedigital
+    REGISTRY_USER: ukhomeofficedigital+oauth2_proxy
+  when:
+    event:
+    - tag
+
+- name: scan_image
+  pull: Always
+  image: 340268328991.dkr.ecr.eu-west-2.amazonaws.com/acp/trivy/client:latest
+  resources:
+    limits:
+      cpu: 1000
+      memory: 1024Mi
+  environment:
+    IMAGE_NAME: quay.io/ukhomeofficedigital/oauth2-proxy:${DRONE_TAG}
+    SEVERITY: HIGH,CRITICAL
+  when:
+    event:
+    - pull_request
+    - push
+    - tag
+
+services:
+- name: docker
+  image: 340268328991.dkr.ecr.eu-west-2.amazonaws.com/acp/dind
